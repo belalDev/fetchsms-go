@@ -2,12 +2,10 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	fetchsms "github.com/belaldev/fetchsms-go"
 )
@@ -23,14 +21,9 @@ func main() {
 	if key == "" {
 		log.Fatal("set FETCHSMS_API_KEY")
 	}
-	client, err := fetchsms.NewClient(key)
-	if err != nil {
-		log.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
+	client := fetchsms.New(key)
 	// Paid purchase: never blindly retry an ambiguous failure.
-	v, err := client.GetNumber(ctx, *service)
+	v, err := client.GetNumber(*service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,7 +31,7 @@ func main() {
 	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
 		log.Fatal(err)
 	}
-	code, err := client.WaitForCode(ctx, v.ID)
+	code, err := client.GetCode(v.ID)
 	if err != nil {
 		log.Fatal(err)
 	}

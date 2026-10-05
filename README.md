@@ -2,17 +2,78 @@
 
 A standard-library-only, typed Go client for Fetch SMS API v1. Includes the public catalog, API-key verification/rental endpoints, balance, cancellable polling, and signed webhook decoding. This is an independent SDK, not an official Fetch SMS release.
 
+## Get a number, then get its code
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+
+    fetchsms "github.com/belaldev/fetchsms-go"
+)
+
+func main() {
+    client := fetchsms.New(os.Getenv("FETCHSMS_API_KEY"))
+    number, err := client.GetNumber("telegram") // Paid purchase.
+    if err != nil { fmt.Fprintln(os.Stderr, err); return }
+    fmt.Printf("Order %s: enter %s into Telegram and request its SMS.\n", number.ID, number.Number)
+    code, err := client.GetCode(number.ID) // Polls while you trigger the SMS there.
+    if err != nil { fmt.Fprintln(os.Stderr, err); return }
+    _ = code // Pass securely to your application; do not log it.
+    fmt.Println("Code received.")
+}
+```
+
+**`GetNumber` charges wallet funds.** Set `FETCHSMS_API_KEY` in your environment;
+never put credentials in source control. Choose a slug from the current catalog
+and review prices/account limits before running. `New` makes no requests.
+`GetNumber` makes one paid POST, with no quote/balance preflight and no retry.
+A timeout or failed response may follow a successful charge: reconcile via
+list/get/dashboard before purchasing again. Save the returned order ID.
+
+You must enter the number into the external service and request its SMS there.
+`GetCode` only retrieves the code: it polls immediately, then waits three seconds
+between polls, for up to **15 minutes from the call**. Each HTTP request has a
+30-second timeout; `GetNumber` also has its own **30-second operation deadline**.
+The polling deadline does not extend the server's verification lifetime, cancel
+an order, or guarantee a refund. HTTP 429 polling backoff honors `Retry-After`;
+other errors and terminal statuses can stop polling earlier. Codes remain strings,
+preserving leading zeroes.
+
 ## Requirements and installation
 
 Go 1.26.5 or newer (the existing module/toolchain requirement is preserved).
 
 ```sh
-go get github.com/belaldev/fetchsms-go@v0.1.0
+go get github.com/belaldev/fetchsms-go@v0.2.0
 ```
 
 For local development, clone the repository or use a Go workspace.
 
-## Quickstart: no purchase
+## Examples and advanced API
+
+The runnable [simple example](examples/simple/main.go) uses `New`, `GetNumber`,
+and `GetCode`, with an explicit `-spend` guard and an SMS-trigger prompt.
+The [advanced verification example](examples/verification/main.go) and
+[rental example](examples/rental/main.go) retain context/configuration control.
+Examples are compiled in tests, not executed against live APIs.
+
+```sh
+# These commands SPEND MONEY; do not run as an installation check.
+go run ./examples/simple -spend -service telegram
+go run ./examples/verification -spend -service 4
+go run ./examples/rental -spend
+```
+
+All v0.1.0 APIs remain unchanged. Use `NewClient(key, ...options)` for custom
+contexts, HTTP settings, polling intervals, catalog/quote/balance calls, numeric
+service IDs, area codes, rentals, and webhooks. Its existing
+`GetNumber(ctx, service)` and `WaitForCode(ctx, id)` remain available.
+`Quote` is not a price reservation or spending cap.
+
+### Public catalog: no purchase
 
 ```go
 package main
@@ -20,105 +81,27 @@ package main
 import (
     "context"
     "fmt"
-    "log"
     "time"
 
     fetchsms "github.com/belaldev/fetchsms-go"
 )
 
 func main() {
-    client, err := fetchsms.NewClient("") // Catalog calls need no key.
-    if err != nil { log.Fatal(err) }
+    client, err := fetchsms.NewClient("")
+    if err != nil { fmt.Println(err); return }
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
     services, err := client.Services(ctx)
-    if err != nil { log.Fatal(err) }
+    if err != nil { fmt.Println(err); return }
     for _, service := range services {
         fmt.Printf("%d %s: %d cents\n", service.ID, service.Name, service.PriceCents)
     }
 }
 ```
 
-## Receive a verification code
-
-**Creating/reusing a verification or creating/extending a rental spends real wallet funds.** Read the current quote and account limits first. Examples require an explicit `-spend` flag and read credentials from `FETCHSMS_API_KEY`; never put credentials in source control.
-
-1. Fetch `Services` and choose a service slug, such as `telegram`.
-2. Use `Quote` and `Balance` before purchasing. Quotes are not reservations or spending caps: prices and stock can change.
-3. Call `GetNumber(ctx, "telegram")` once to buy a number. Save its ID immediately.
-4. **Enter the returned number into the chosen external service and trigger its SMS there.** Fetch SMS reserves/receives numbers; creating a verification does not request a login SMS from that service.
-5. Call `WaitForCode(ctx, id)` with a deadline. The returned string preserves leading zeroes. Deliver it securely; do not log codes or full SMS bodies.
-
-### Simple purchase and polling
-
-`GetNumber(ctx, service)` returns `(Verification, error)`. It validates the slug
-with `ServiceSlug` and calls `CreateVerification` with no area-code preference.
-Despite its name, **this is a paid POST, not a read-only lookup**. It makes no
-quote/balance preflight and never automatically retries. A timeout, cancellation,
-or failed response can leave the purchase outcome unknown: reconcile your account
-before trying again. Use `GetVerification(ctx, id)` to read an existing order.
-
-This complete program requires explicit purchase authorization:
-
-```go
-package main
-
-import (
- "bufio"
- "context"
- "flag"
- "fmt"
- "log"
- "os"
- "time"
-
- fetchsms "github.com/belaldev/fetchsms-go"
-)
-
-func main() {
- spend := flag.Bool("spend", false, "authorize one paid verification")
- service := flag.String("service", "telegram", "service slug from the current catalog")
- flag.Parse()
- if !*spend {
-  log.Fatal("This example spends wallet funds. Review it, then explicitly pass -spend.")
- }
- key := os.Getenv("FETCHSMS_API_KEY")
- if key == "" { log.Fatal("set FETCHSMS_API_KEY") }
- client, err := fetchsms.NewClient(key)
- if err != nil { log.Fatal(err) }
- ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
- defer cancel()
- // Paid purchase: never blindly retry an ambiguous failure.
- v, err := client.GetNumber(ctx, *service)
- if err != nil { log.Fatal(err) }
- fmt.Printf("Verification %s: enter %s into the selected service and request an SMS there.\nPress Enter after triggering the SMS.\n", v.ID, v.Number)
- if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil { log.Fatal(err) }
- code, err := client.WaitForCode(ctx, v.ID)
- if err != nil { log.Fatal(err) }
- // Deliver code to your application securely; do not log it.
- _ = code
- fmt.Println("Code received (not printed).")
-}
-```
-
-Use `CreateVerification` with `ServiceID` or `ServiceSlug` for advanced requests,
-including a numeric service ID or `AreaCode`; all existing APIs remain available.
-See the compiling [simple example](examples/simple/main.go),
-[advanced verification example](examples/verification/main.go), and
-[rental example](examples/rental/main.go). They are compiled in CI but never
-executed by tests. Review prices and account limits before running:
-
-```sh
-# These commands SPEND MONEY; do not run as an installation check.
-go run ./examples/simple -spend -service telegram
-# Advanced numeric-ID workflow:
-go run ./examples/verification -spend -service 4
-go run ./examples/rental -spend
-```
-
 A verification has a fixed 15-minute window. `VerificationMessages` returns all matching codes newest first; `Verification.Code` is nullable and is the latest. Rental delivery is limited to supported services. `WaitForRentalCode` returns the latest existing code, **not necessarily a new delivery**; track message IDs through `RentalMessages` or webhooks for subsequent SMS.
 
-## Configuration and behavior
+## Advanced configuration and shared behavior
 
 ```go
 client, err := fetchsms.NewClient(key,
@@ -129,7 +112,7 @@ client, err := fetchsms.NewClient(key,
 ```
 
 - Default request timeout: 30 seconds; polling interval: 3 seconds. An injected HTTP client supplies its own timeout. Its configuration is copied, not its transport/jar. Do not mutate shared configuration concurrently.
-- Every network method takes `context.Context`. Nil means `context.Background()`; prefer explicit deadlines, especially for polling.
+- Every `Client` network method takes `context.Context`. Nil means `context.Background()`; prefer explicit deadlines, especially for polling. `SimpleClient` instead supplies its own per-call deadlines and exposes no settings.
 - Public catalog calls do not send the key. Authenticated calls require a nonblank key. All redirects are rejected, even with an injected client's redirect callback, preventing credential forwarding and redirected purchases.
 - Use HTTPS in production. HTTP base URLs exist for local mock servers; a custom base URL receives your credentials on authenticated calls. Only configure trusted hosts/transports.
 - No SDK retries for ordinary requests, especially purchases. Only polling GETs retry HTTP 429, waiting at least the greater of the poll interval and `Retry-After` (seconds or HTTP date). Waiting is cancellable. Other HTTP/transport failures return immediately.

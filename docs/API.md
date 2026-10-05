@@ -1,6 +1,37 @@
 # API reference
 
-Base URL: `https://api.fetchsms.com/v1`. All methods take a context first and return `(typedValue, error)`, except `CancelVerification`, which returns only `error`. The client is created with `NewClient(key, ...options)` and returns `(*Client, error)`.
+Base URL: `https://api.fetchsms.com/v1`.
+
+## Simple client
+
+`New(key string) *SimpleClient` creates a private default `Client` without requests
+or configuration errors. A blank key is rejected locally on authenticated calls.
+
+| Method | Behavior | Result |
+|---|---|---|
+| `GetNumber(service string)` | One paid POST `/verifications`, validated service slug, no area-code preference | `(Verification, error)` |
+| `GetCode(id string)` | Poll GET `/verifications/{id}` until a code or error | `(string, error)` |
+
+No caller context or options are required. Each `GetNumber` call creates a fresh
+30-second context deadline. Each `GetCode` call creates a fresh 15-minute deadline
+starting at that call, polls immediately, and waits three seconds between polls.
+The underlying HTTP client also limits each request to 30 seconds. HTTP 429 GETs
+wait at least the greater of three seconds and `Retry-After`; other errors return
+immediately. Terminal/unknown statuses return `*TerminalStatusError`. The server
+may expire the verification before the local polling deadline. Timeouts do not
+extend/cancel orders or promise refunds. Codes are strings, retaining leading zeroes.
+
+**GetNumber spends funds**, without quote/balance preflight or mutation retries.
+A failed response can follow a charge; reconcile account state before repeating.
+Neither method triggers an SMS at the external service: enter the returned number
+there and request its SMS yourself. `GetCode` only polls for the received code.
+
+## Advanced client (unchanged v0.1.0 API)
+
+`NewClient(key, ...options)` returns `(*Client, error)`. All `Client` network methods
+below take a context first and return `(typedValue, error)`, except
+`CancelVerification`, which returns only `error`. Use this client for cancellation,
+custom timeouts/settings, catalog, numeric service IDs, area codes, and rentals.
 
 ## Public catalog (no Authorization header)
 
@@ -37,7 +68,7 @@ Cancel/reuse calls send no invented request body. Optional AreaCode is a three-d
 
 ### Verification
 
-For simple purchases, call `GetNumber(ctx, "telegram")`. It wraps `ServiceSlug`
+With the advanced client, call `GetNumber(ctx, "telegram")`. It wraps `ServiceSlug`
 and then `CreateVerification`, returning `(Verification, error)`. Invalid slugs
 fail locally without sending a request; API errors propagate unchanged. It does
 not fetch a quote/balance, select an area code, trigger an external SMS, or wait
