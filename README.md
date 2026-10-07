@@ -4,30 +4,27 @@ A standard-library-only, typed Go client for Fetch SMS API v1. Includes the publ
 
 ## Get a number, then get its code
 
+No `os`, `context`, `log`, or timer setup required. The package handles timeouts,
+polling, and response decoding internally.
+
 ```go
-package main
+fetchClient := fetchsms.New("FETCHSMS_API_KEY")
 
-import (
-    "fmt"
-    "os"
+number, err := fetchClient.GetNumber("whatsapp")
+if err != nil { return err }
 
-    fetchsms "github.com/belaldev/fetchsms-go"
-)
+// Request the SMS using number.Number.
 
-func main() {
-    client := fetchsms.New(os.Getenv("FETCHSMS_API_KEY"))
-    number, err := client.GetNumber("telegram") // Paid purchase.
-    if err != nil { fmt.Fprintln(os.Stderr, err); return }
-    fmt.Printf("Order %s: enter %s into Telegram and request its SMS.\n", number.ID, number.Number)
-    code, err := client.GetCode(number.ID) // Polls while you trigger the SMS there.
-    if err != nil { fmt.Fprintln(os.Stderr, err); return }
-    _ = code // Pass securely to your application; do not log it.
-    fmt.Println("Code received.")
-}
+code, err := fetchClient.GetCode(number.ID)
+if err != nil { return err }
 ```
 
-**`GetNumber` charges wallet funds.** Set `FETCHSMS_API_KEY` in your environment;
-never put credentials in source control. Choose a slug from the current catalog
+Import `fetchsms "github.com/belaldev/fetchsms-go"` and use this snippet inside
+an application function that returns `error`; use `code` in the rest of that
+function. Replace `"FETCHSMS_API_KEY"` with your actual key—it is a placeholder,
+not an automatic environment-variable lookup. Never commit a real key.
+
+**`GetNumber` charges wallet funds.** Choose a slug from the current catalog
 and review prices/account limits before running. `New` makes no requests.
 `GetNumber` makes one paid POST, with no quote/balance preflight and no retry.
 A timeout or failed response may follow a successful charge: reconcile via
